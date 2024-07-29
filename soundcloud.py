@@ -6,6 +6,12 @@ from pygame import mixer
 import json
 import time
 import threading
+from discordrp import Presence
+import time
+
+client_id = "1267547991791898706"  # Replace this with your own client id
+start_time = int(time.time())
+presence = Presence(client_id)
 
 # Function to download the playlist
 def download_playlist(playlist_url):
@@ -86,6 +92,30 @@ def update_progress_text(window):
         position = mixer.music.get_pos() / 1000
         window.write_event_value('UPDATE_PROGRESS', position)
         time.sleep(1)
+    
+    # When the current song ends, play the next song
+    if current_song and not mixer.music.get_busy():
+        next_song_index = (song_list.index(current_song) + 1) % len(song_list)
+        play_song(song_list[next_song_index], window)
+
+# Function to play a song
+def play_song(song, window):
+    global current_song, start_time
+    current_song = song
+    presence.set(
+        {
+            "state": "Playing Music on SoundCloud",
+            "details": f'{song}',
+            "timestamps": {"start": int(time.time())},
+        }
+    )
+    song_filename = get_filename_from_title(song)
+    if song_filename:
+        song_path = os.path.join("playlist", song_filename)
+        mixer.music.load(song_path)
+        mixer.music.play()
+        mixer.music.set_volume(values['Volume'] / 100)
+        threading.Thread(target=update_progress_text, args=(window,), daemon=True).start()
 
 # Initialize Pygame mixer
 mixer.init()
@@ -98,7 +128,7 @@ layout = [
     [sg.Text("Current Time: 00:00", size=(20, 1), key='CurrentTime')],
     [sg.Listbox(values=[], size=(30, 6), key='SongList', enable_events=True)],
     [sg.Slider(range=(0, 100), orientation='h', size=(20, 10), key='Volume', enable_events=True, default_value=50)],
-    [sg.Button("Stop"), sg.Button("Exit")],
+    [sg.Button("Stop"), sg.Button("Skip"), sg.Button("Back"), sg.Button("Exit")],
 ]
 
 # Create the window
@@ -110,13 +140,10 @@ window = sg.Window(
     finalize=True
 )
 
-# Create a system tray menu
-tray = sg.SystemTray(menu=['', ['Show', 'Exit']], tooltip='Soundcloud Player')
-tray.show_message('Soundcloud Player', 'App is running in the system tray')
-
 def refresh_song_list():
-    track_list = get_song_list()
-    window['SongList'].update(values=track_list)
+    global song_list
+    song_list = get_song_list()
+    window['SongList'].update(values=song_list)
 
 def delete_playlist():
     if os.path.exists("playlist"):
@@ -143,17 +170,16 @@ y_pos = screen_height - window_height - 10
 # Move window to bottom-right corner
 window.move(x_pos, y_pos)
 
+# Initialize current song and song list
+current_song = None
+song_list = get_song_list()
+
 # Event loop to process "events" and get the "values" of inputs
 while True:
     event, values = window.read(timeout=100)
-    tray_event = tray.read(timeout=100)
     
-    if event == sg.WIN_CLOSED or event == "Exit" or tray_event == "Exit":
+    if event == sg.WIN_CLOSED or event == "Exit":
         break
-    
-    if tray_event == "Show":
-        window.un_hide()
-        window.bring_to_front()
 
     if event == "Download Playlist":
         download_playlist(values['URL'])
@@ -171,17 +197,26 @@ while True:
     
     if event == "SongList" and values['SongList']:
         selected_song = values['SongList'][0]
-        song_filename = get_filename_from_title(selected_song)
-        if song_filename:
-            song_path = os.path.join("playlist", song_filename)
-            mixer.music.load(song_path)
-            mixer.music.play()
-            mixer.music.set_volume(values['Volume'] / 100)
-            # Start background thread to update progress text
-            threading.Thread(target=update_progress_text, args=(window,), daemon=True).start()
+        play_song(selected_song, window)
 
     if event == "Stop":
+        presence.set(
+            {
+                "state": "Not Playing Music",
+                "details": 'Paused'
+            }
+        )
         mixer.music.stop()
+        current_song = None
+    
+    if event == "Skip":
+        if current_song:
+            next_song_index = (song_list.index(current_song) + 1) % len(song_list)
+            play_song(song_list[next_song_index], window)
+    
+    if event == "Back":
+        if current_song:
+            play_song(current_song, window)
 
     if event == 'Volume':
         mixer.music.set_volume(values['Volume'] / 100)
@@ -190,6 +225,6 @@ while True:
         current_time = time.strftime("%M:%S", time.gmtime(values['UPDATE_PROGRESS']))
         window['CurrentTime'].update(f"Current Time: {current_time}")
 
-# Close the window and tray
+# Close the window
 window.close()
-tray.close()
+presence.close()
